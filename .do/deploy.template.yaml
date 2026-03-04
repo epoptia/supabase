@@ -284,6 +284,44 @@ spec:
         - key: RLIMIT_NOFILE
           value: "65536"
 
+  workers:
+    # ── Epoptia Realtime Bridge ──────────────────────────────────────────────────
+    # CDC bridge: watches Postgres for changes and publishes to Realtime channels.
+    # Worker type = outbound-only. Connects TO Realtime — never receives connections.
+    # Reaches Realtime at http://realtime:4000 on the App Platform private network.
+    - name: realtime-bridge
+      image:
+        registry_type: DOCR
+        registry: epoptia4-container
+        repository: supabase-realtime-bridge
+        tag: prod
+      instance_size_slug: basic-xs
+      instance_count: 1
+      envs:
+        - key: NODE_ENV
+          value: "production"
+        - key: PORT
+          value: "3011"
+        - key: SUPABASE_TENANT_DISCOVERY
+          value: "customers"
+        - key: SUPABASE_URL
+          value: "http://realtime:4000"
+        - key: DATABASE_URL
+          value: ${supabase-db.DATABASE_URL}
+          type: SECRET
+        - key: DATABASE_URL_DEFAULTDB
+          value: ${supabase-db.DATABASE_URL}
+          type: SECRET
+        - key: SUPABASE_ANON_KEY
+          value: <REQUIRED>
+          type: SECRET
+        - key: SUPABASE_SERVICE_ROLE_KEY
+          value: <REQUIRED>
+          type: SECRET
+        - key: SUPABASE_REALTIME_JWT
+          value: <REQUIRED>
+          type: SECRET
+
   jobs:
     # Database Initialization (runs before services start)
     - name: db-init
