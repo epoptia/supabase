@@ -376,12 +376,14 @@ ALTER ROLE supabase_auth_admin IN DATABASE defaultdb SET search_path = auth, pub
 ALTER ROLE supabase_admin IN DATABASE defaultdb SET search_path = public, extensions;
 
 -- ============================================================================
--- REALTIME: ensure db_pool is always set on tenant extensions
+-- REALTIME: ensure db_pool and ssl_enforced are always set on tenant extensions
 -- ============================================================================
 -- The Realtime seed (SEED_SELF_HOST=true) recreates the tenant on every restart
--- without db_pool, defaulting it to 1. With multiple tables subscribing
--- simultaneously this causes DatabaseConnectionRateLimitReached.
--- This trigger intercepts INSERTs and injects db_pool automatically.
+-- without db_pool (defaults to 1) or ssl_enforced (defaults to false).
+-- db_pool=1 causes DatabaseConnectionRateLimitReached with multiple subscriptions.
+-- ssl_enforced=false causes Postgrex to connect without SSL, which DO managed
+-- Postgres rejects (pg_hba.conf only allows hostssl connections).
+-- This trigger intercepts INSERTs and injects both values automatically.
 -- On first deploy the _realtime.extensions table doesn't exist yet (created by
 -- Realtime migrations), so we guard with an IF EXISTS check.
 DO $$
@@ -390,27 +392,33 @@ BEGIN
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = '_realtime' AND table_name = 'extensions'
   ) THEN
-    -- Patch any existing extensions missing db_pool
+    -- Patch any existing extensions missing db_pool or ssl_enforced
     UPDATE _realtime.extensions
-    SET settings = COALESCE(settings, '{}'::jsonb) || '{"db_pool": "20"}'::jsonb,
+    SET settings = COALESCE(settings, '{}'::jsonb)
+                  || '{"db_pool": "20", "ssl_enforced": true}'::jsonb,
         updated_at = NOW()
     WHERE type = 'postgres_cdc_rls'
-      AND (settings->>'db_pool' IS NULL OR settings->>'db_pool' = '1');
+      AND (
+        settings->>'db_pool' IS NULL OR settings->>'db_pool' = '1'
+        OR (settings->>'ssl_enforced')::boolean IS NOT TRUE
+      );
 
     -- Create trigger for future INSERTs (handles re-seeding)
-    CREATE OR REPLACE FUNCTION _realtime.ensure_db_pool()
+    CREATE OR REPLACE FUNCTION _realtime.ensure_tenant_settings()
     RETURNS TRIGGER AS $fn$
     BEGIN
       IF NEW.type = 'postgres_cdc_rls' THEN
-        NEW.settings = COALESCE(NEW.settings, '{}'::jsonb) || '{"db_pool": "20"}'::jsonb;
+        NEW.settings = COALESCE(NEW.settings, '{}'::jsonb)
+                      || '{"db_pool": "20", "ssl_enforced": true}'::jsonb;
       END IF;
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
 
     DROP TRIGGER IF EXISTS ensure_db_pool ON _realtime.extensions;
-    CREATE TRIGGER ensure_db_pool
+    DROP TRIGGER IF EXISTS ensure_tenant_settings ON _realtime.extensions;
+    CREATE TRIGGER ensure_tenant_settings
       BEFORE INSERT ON _realtime.extensions
-      FOR EACH ROW EXECUTE FUNCTION _realtime.ensure_db_pool();
+      FOR EACH ROW EXECUTE FUNCTION _realtime.ensure_tenant_settings();
   END IF;
 END $$;
