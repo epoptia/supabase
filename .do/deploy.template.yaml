@@ -29,7 +29,7 @@ spec:
             prefix: /realtime/v1
         component:
           name: realtime
-          rewrite: /
+          # Trim Prefix (no rewrite): /realtime/v1/socket/websocket → /socket/websocket
 
   services:
     # PostgREST - REST API for PostgreSQL
