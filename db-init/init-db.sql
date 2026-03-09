@@ -374,3 +374,43 @@ ALTER ROLE supabase_auth_admin IN DATABASE defaultdb SET search_path = auth, pub
 
 -- Set search_path for supabase_admin (don't include auth schema per official setup)
 ALTER ROLE supabase_admin IN DATABASE defaultdb SET search_path = public, extensions;
+
+-- ============================================================================
+-- REALTIME: ensure db_pool is always set on tenant extensions
+-- ============================================================================
+-- The Realtime seed (SEED_SELF_HOST=true) recreates the tenant on every restart
+-- without db_pool, defaulting it to 1. With multiple tables subscribing
+-- simultaneously this causes DatabaseConnectionRateLimitReached.
+-- This trigger intercepts INSERTs and injects db_pool automatically.
+-- On first deploy the _realtime.extensions table doesn't exist yet (created by
+-- Realtime migrations), so we guard with an IF EXISTS check.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = '_realtime' AND table_name = 'extensions'
+  ) THEN
+    -- Patch any existing extensions missing db_pool
+    UPDATE _realtime.extensions
+    SET settings = COALESCE(settings, '{}'::jsonb) || '{"db_pool": "20"}'::jsonb,
+        updated_at = NOW()
+    WHERE type = 'postgres_cdc_rls'
+      AND (settings->>'db_pool' IS NULL OR settings->>'db_pool' = '1');
+
+    -- Create trigger for future INSERTs (handles re-seeding)
+    CREATE OR REPLACE FUNCTION _realtime.ensure_db_pool()
+    RETURNS TRIGGER AS $fn$
+    BEGIN
+      IF NEW.type = 'postgres_cdc_rls' THEN
+        NEW.settings = COALESCE(NEW.settings, '{}'::jsonb) || '{"db_pool": "20"}'::jsonb;
+      END IF;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS ensure_db_pool ON _realtime.extensions;
+    CREATE TRIGGER ensure_db_pool
+      BEFORE INSERT ON _realtime.extensions
+      FOR EACH ROW EXECUTE FUNCTION _realtime.ensure_db_pool();
+  END IF;
+END $$;
