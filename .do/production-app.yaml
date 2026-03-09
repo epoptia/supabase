@@ -300,6 +300,8 @@ services:
         value: <REQUIRED>
       - key: SEED_SELF_HOST
         value: "true"
+      - key: SELF_HOST_TENANT_NAME
+        value: supabase  # must match first subdomain of public hostname (supabase.epoptia.io → "supabase")
       - key: REPLICATION_MODE
         value: RLS
       - key: RUN_JANITOR
