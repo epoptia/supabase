@@ -403,11 +403,11 @@ BEGIN
     -- Patch any existing extensions missing db_pool or ssl_enforced
     UPDATE _realtime.extensions
     SET settings = COALESCE(settings, '{}'::jsonb)
-                  || '{"db_pool": "20", "ssl_enforced": true}'::jsonb,
+                  || jsonb_build_object('db_pool', 20, 'ssl_enforced', true),
         updated_at = NOW()
     WHERE type = 'postgres_cdc_rls'
       AND (
-        settings->>'db_pool' IS NULL OR settings->>'db_pool' NOT IN ('20')
+        settings->>'db_pool' IS NULL OR (settings->'db_pool')::int IS DISTINCT FROM 20
         OR (settings->>'ssl_enforced')::boolean IS NOT TRUE
       );
 
@@ -417,7 +417,7 @@ BEGIN
     BEGIN
       IF NEW.type = 'postgres_cdc_rls' THEN
         NEW.settings = COALESCE(NEW.settings, '{}'::jsonb)
-                      || '{"db_pool": "20", "ssl_enforced": true}'::jsonb;
+                      || jsonb_build_object('db_pool', 20, 'ssl_enforced', true);
       END IF;
       RETURN NEW;
     END;
