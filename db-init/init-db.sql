@@ -388,8 +388,8 @@ ALTER ROLE supabase_admin IN DATABASE defaultdb SET search_path = public, extens
 -- db_pool=1 causes DatabaseConnectionRateLimitReached with multiple subscriptions.
 -- ssl_enforced=false causes Postgrex to connect without SSL, which DO managed
 -- Postgres rejects (pg_hba.conf only allows hostssl connections).
--- db_pool=20 is safe for managed Postgres with max_connections=50 (Supabase Cloud
--- defaults to 1; 20 gives headroom for CDC multiplexing without exhausting the pool).
+-- db_pool=5 is conservative for managed Postgres with max_connections=50 (Supabase Cloud
+-- defaults to 1; 5 gives headroom for CDC multiplexing without exhausting the pool).
 -- This trigger intercepts INSERTs AND UPDATEs so that re-seeding via UPSERT
 -- (which the pipeline does on every deploy) can never override these values.
 -- On first deploy the _realtime.extensions table doesn't exist yet (created by
@@ -403,11 +403,11 @@ BEGIN
     -- Patch any existing extensions missing db_pool or ssl_enforced
     UPDATE _realtime.extensions
     SET settings = COALESCE(settings, '{}'::jsonb)
-                  || jsonb_build_object('db_pool', 20, 'ssl_enforced', true),
+                  || jsonb_build_object('db_pool', 5, 'ssl_enforced', true),
         updated_at = NOW()
     WHERE type = 'postgres_cdc_rls'
       AND (
-        settings->>'db_pool' IS NULL OR (settings->'db_pool')::int IS DISTINCT FROM 20
+        settings->>'db_pool' IS NULL OR (settings->'db_pool')::int IS DISTINCT FROM 5
         OR (settings->>'ssl_enforced')::boolean IS NOT TRUE
       );
 
@@ -417,7 +417,7 @@ BEGIN
     BEGIN
       IF NEW.type = 'postgres_cdc_rls' THEN
         NEW.settings = COALESCE(NEW.settings, '{}'::jsonb)
-                      || jsonb_build_object('db_pool', 20, 'ssl_enforced', true);
+                      || jsonb_build_object('db_pool', 5, 'ssl_enforced', true);
       END IF;
       RETURN NEW;
     END;
