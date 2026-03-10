@@ -431,6 +431,129 @@ BEGIN
   END IF;
 END $$;
 
+-- ============================================================================
+-- FIX: MigrationsFailedToRun — realtime.list_changes()
+-- ============================================================================
+-- Realtime migration 20230328144023 creates list_changes() with
+--   SET log_min_messages TO 'fatal'
+-- — a superuser-only GUC. On DO managed Postgres (non-superuser) it fails with:
+--   MigrationsFailedToRun: permission denied to set parameter "log_min_messages"
+-- (upstream issues: supabase/realtime#614, supabase/realtime#1326)
+--
+-- Fix: pre-create the function WITHOUT the SET attribute, then mark the
+-- migration as applied so Realtime skips it on subsequent boots.
+--
+-- Guards: this block only runs when Realtime has already booted at least once
+-- (creating realtime.schema_migrations + prerequisite types). On a completely
+-- fresh deploy the block is a no-op; re-deploying after the first failed boot
+-- will apply the fix.
+DO $$
+BEGIN
+  -- Guard 1: schema_migrations must exist (created by Realtime tenant migrations)
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'realtime' AND table_name = 'schema_migrations'
+  ) THEN
+    RAISE NOTICE 'init-db: realtime.schema_migrations not found — skipping list_changes fix (first deploy)';
+    RETURN;
+  END IF;
+
+  -- Guard 2: skip if migration already applied
+  IF EXISTS (
+    SELECT 1 FROM realtime.schema_migrations WHERE version = 20230328144023
+  ) THEN
+    RAISE NOTICE 'init-db: migration 20230328144023 already applied — skipping';
+    RETURN;
+  END IF;
+
+  -- Guard 3: prerequisite type must exist (created by earlier migrations)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON t.typnamespace = n.oid
+    WHERE n.nspname = 'realtime' AND t.typname = 'wal_rls'
+  ) THEN
+    RAISE NOTICE 'init-db: realtime.wal_rls type not found — skipping list_changes fix';
+    RETURN;
+  END IF;
+
+  -- Create list_changes WITHOUT the problematic SET log_min_messages attribute.
+  -- Function body is identical to upstream Supabase Realtime migration 20230328144023.
+  EXECUTE $fn$
+    CREATE OR REPLACE FUNCTION realtime.list_changes(
+        publication name,
+        slot_name name,
+        max_changes int,
+        max_record_bytes int
+    )
+    RETURNS SETOF realtime.wal_rls
+    LANGUAGE sql
+    AS $body$
+      with pub as (
+        select
+          concat_ws(
+            ',',
+            case when bool_or(pubinsert) then 'insert' else null end,
+            case when bool_or(pubupdate) then 'update' else null end,
+            case when bool_or(pubdelete) then 'delete' else null end
+          ) as w2j_actions,
+          coalesce(
+            string_agg(
+              realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
+              ','
+            ) filter (where ppt.tablename is not null and ppt.tablename not like '% %'),
+            ''
+          ) w2j_add_tables
+        from
+          pg_publication pp
+          left join pg_publication_tables ppt
+            on pp.pubname = ppt.pubname
+        where
+          pp.pubname = publication
+        group by
+          pp.pubname
+        limit 1
+      ),
+      w2j as (
+        select
+          x.*, pub.w2j_add_tables
+        from
+          pub,
+          pg_logical_slot_get_changes(
+            slot_name, null, max_changes,
+            'include-pk', 'true',
+            'include-transaction', 'false',
+            'include-timestamp', 'true',
+            'include-type-oids', 'true',
+            'format-version', '2',
+            'actions', pub.w2j_actions,
+            'add-tables', pub.w2j_add_tables
+          ) x
+      )
+      select
+        xyz.wal,
+        xyz.is_rls_enabled,
+        xyz.subscription_ids,
+        xyz.errors
+      from
+        w2j,
+        realtime.apply_rls(
+          wal := w2j.data::jsonb,
+          max_record_bytes := max_record_bytes
+        ) xyz(wal, is_rls_enabled, subscription_ids, errors)
+      where
+        w2j.w2j_add_tables <> ''
+        and xyz.subscription_ids[1] is not null
+    $body$;
+  $fn$;
+
+  -- Mark migration as applied so Realtime skips it
+  INSERT INTO realtime.schema_migrations (version, inserted_at)
+  VALUES (20230328144023, NOW()::timestamp(0))
+  ON CONFLICT DO NOTHING;
+
+  RAISE NOTICE 'init-db: created realtime.list_changes() (no SET log_min_messages) and marked migration 20230328144023';
+END $$;
+
 -- ============================================================
 -- Rename seeded tenant if SELF_HOST_TENANT_NAME differs from 'realtime-dev'.
 -- The psql variable :tenant_name is passed by run-db-init.sh.
