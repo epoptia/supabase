@@ -430,3 +430,77 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION _realtime.ensure_tenant_settings();
   END IF;
 END $$;
+
+-- ============================================================
+-- Rename seeded tenant if SELF_HOST_TENANT_NAME differs from 'realtime-dev'.
+-- The psql variable :tenant_name is passed by run-db-init.sh.
+-- On first deploy the tenant table may not exist yet — the DO block guards this.
+-- ============================================================
+SELECT set_config('app.tenant_name', :'tenant_name', false);
+
+DO $$
+DECLARE
+  target TEXT := current_setting('app.tenant_name', true);
+  fk_name TEXT;
+BEGIN
+  -- Skip if no target, target is default seed name, or tables don't exist yet
+  IF target IS NULL OR target = '' OR target = 'realtime-dev' THEN
+    RETURN;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = '_realtime' AND table_name = 'tenants'
+  ) THEN
+    RAISE NOTICE 'init-db: _realtime.tenants not found yet, skipping tenant rename';
+    RETURN;
+  END IF;
+
+  -- Skip if target tenant already exists (idempotent)
+  IF EXISTS (SELECT 1 FROM _realtime.tenants WHERE external_id = target) THEN
+    RAISE NOTICE 'init-db: tenant "%" already exists, skipping rename', target;
+    RETURN;
+  END IF;
+
+  -- Skip if source tenant doesn't exist (nothing to rename)
+  IF NOT EXISTS (SELECT 1 FROM _realtime.tenants WHERE external_id = 'realtime-dev') THEN
+    RAISE NOTICE 'init-db: tenant "realtime-dev" not found, skipping rename';
+    RETURN;
+  END IF;
+
+  -- Make FK constraint deferrable so we can update both tables atomically
+  SELECT conname INTO fk_name
+  FROM pg_constraint
+  WHERE conrelid = '_realtime.extensions'::regclass
+    AND confrelid = '_realtime.tenants'::regclass
+    AND contype = 'f'
+    AND NOT condeferrable
+  LIMIT 1;
+
+  IF fk_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE _realtime.extensions DROP CONSTRAINT %I', fk_name);
+    EXECUTE format(
+      'ALTER TABLE _realtime.extensions ADD CONSTRAINT %I '
+      'FOREIGN KEY (tenant_external_id) REFERENCES _realtime.tenants(external_id) '
+      'DEFERRABLE INITIALLY DEFERRED',
+      fk_name
+    );
+    RAISE NOTICE 'init-db: made FK constraint % deferrable', fk_name;
+  END IF;
+
+  -- Rename in deferred mode
+  SET CONSTRAINTS ALL DEFERRED;
+
+  UPDATE _realtime.tenants
+  SET external_id = target
+  WHERE external_id = 'realtime-dev';
+
+  UPDATE _realtime.extensions
+  SET tenant_external_id = target,
+      updated_at = NOW()
+  WHERE tenant_external_id = 'realtime-dev';
+
+  SET CONSTRAINTS ALL IMMEDIATE;
+
+  RAISE NOTICE 'init-db: renamed tenant "realtime-dev" → "%"', target;
+END $$;
