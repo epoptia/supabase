@@ -388,7 +388,10 @@ ALTER ROLE supabase_admin IN DATABASE defaultdb SET search_path = public, extens
 -- db_pool=1 causes DatabaseConnectionRateLimitReached with multiple subscriptions.
 -- ssl_enforced=false causes Postgrex to connect without SSL, which DO managed
 -- Postgres rejects (pg_hba.conf only allows hostssl connections).
--- This trigger intercepts INSERTs and injects both values automatically.
+-- db_pool=20 is safe for managed Postgres with max_connections=50 (Supabase Cloud
+-- defaults to 1; 20 gives headroom for CDC multiplexing without exhausting the pool).
+-- This trigger intercepts INSERTs AND UPDATEs so that re-seeding via UPSERT
+-- (which the pipeline does on every deploy) can never override these values.
 -- On first deploy the _realtime.extensions table doesn't exist yet (created by
 -- Realtime migrations), so we guard with an IF EXISTS check.
 DO $$
@@ -404,11 +407,11 @@ BEGIN
         updated_at = NOW()
     WHERE type = 'postgres_cdc_rls'
       AND (
-        settings->>'db_pool' IS NULL OR settings->>'db_pool' = '1'
+        settings->>'db_pool' IS NULL OR settings->>'db_pool' NOT IN ('20')
         OR (settings->>'ssl_enforced')::boolean IS NOT TRUE
       );
 
-    -- Create trigger for future INSERTs (handles re-seeding)
+    -- Create trigger for future INSERTs and UPDATEs (handles re-seeding via UPSERT)
     CREATE OR REPLACE FUNCTION _realtime.ensure_tenant_settings()
     RETURNS TRIGGER AS $fn$
     BEGIN
@@ -423,7 +426,7 @@ BEGIN
     DROP TRIGGER IF EXISTS ensure_db_pool ON _realtime.extensions;
     DROP TRIGGER IF EXISTS ensure_tenant_settings ON _realtime.extensions;
     CREATE TRIGGER ensure_tenant_settings
-      BEFORE INSERT ON _realtime.extensions
+      BEFORE INSERT OR UPDATE ON _realtime.extensions
       FOR EACH ROW EXECUTE FUNCTION _realtime.ensure_tenant_settings();
   END IF;
 END $$;
