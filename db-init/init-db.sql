@@ -68,7 +68,12 @@ GRANT EXECUTE ON FUNCTION auth.email() TO anon, authenticated, service_role;
 -- Install required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS pgjwt WITH SCHEMA extensions;
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS pgjwt WITH SCHEMA extensions;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pgjwt extension not available — skipping (not required for Realtime)';
+END $$;
 
 -- Install optional extensions
 DO $$
