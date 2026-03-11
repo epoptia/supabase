@@ -130,9 +130,13 @@ BEGIN
 
     -- Create supabase_admin
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN
-        CREATE USER supabase_admin CREATEROLE CREATEDB BYPASSRLS;
+        CREATE USER supabase_admin CREATEROLE CREATEDB BYPASSRLS REPLICATION;
     END IF;
 END $$;
+
+-- Ensure supabase_admin has REPLICATION (required for Realtime CDC replication slots).
+-- ALTER ROLE is idempotent — safe to run even if already set.
+ALTER ROLE supabase_admin REPLICATION;
 
 -- Grant API roles to authenticator (allows PostgREST to switch roles based on JWT)
 GRANT anon TO authenticator;
