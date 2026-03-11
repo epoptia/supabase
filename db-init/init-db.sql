@@ -453,14 +453,20 @@ BEGIN
       RAISE NOTICE 'init-db: slot_name for tenant "%" set to "%"', v_tenant, v_slot_name;
     END IF;
 
-    -- Trigger: enforce db_pool and ssl_enforced on future INSERTs/UPDATEs.
-    -- Does NOT override slot_name — each tenant manages its own slot.
+    -- Trigger: enforce db_pool, ssl_enforced, AND slot_name on INSERTs/UPDATEs.
+    -- slot_name is derived as <tenant_external_id>_realtime_slot_managed.
+    -- This prevents Realtime's SEED_SELF_HOST re-seed from overwriting
+    -- the managed slot_name back to the default on every restart.
     CREATE OR REPLACE FUNCTION _realtime.ensure_tenant_settings()
     RETURNS TRIGGER AS $fn$
     BEGIN
       IF NEW.type = 'postgres_cdc_rls' THEN
         NEW.settings = COALESCE(NEW.settings, '{}'::jsonb)
-                      || jsonb_build_object('db_pool', 5, 'ssl_enforced', true);
+                      || jsonb_build_object(
+                           'db_pool', 5,
+                           'ssl_enforced', true,
+                           'slot_name', NEW.tenant_external_id || '_realtime_slot_managed'
+                         );
       END IF;
       RETURN NEW;
     END;
