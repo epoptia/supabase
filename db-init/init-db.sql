@@ -220,17 +220,18 @@ ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON SEQUE
 ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON ROUTINES TO supabase_admin;
 
 -- Transfer ownership of existing _realtime and realtime objects to supabase_admin.
--- Realtime runs its own Ecto migrations as supabase_admin and needs to ALTER tables
--- it owns. On the first deploy doadmin creates these tables, so we fix ownership here.
+-- Realtime runs its own Ecto migrations as supabase_admin and needs to ALTER tables,
+-- functions, and types it owns. On first deploy doadmin creates these, so we fix here.
 DO $$
 DECLARE
   obj record;
 BEGIN
+  -- Tables, partitioned tables, sequences, views, matviews
   FOR obj IN
     SELECT c.oid::regclass AS full_name, c.relkind
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname IN ('_realtime', 'realtime')
-      AND c.relkind IN ('r','p','S','v','m')  -- tables, partitioned, sequences, views, matviews
+      AND c.relkind IN ('r','p','S','v','m')
       AND pg_get_userbyid(c.relowner) <> 'supabase_admin'
   LOOP
     EXECUTE format('ALTER %s %s OWNER TO supabase_admin',
@@ -240,6 +241,27 @@ BEGIN
       END,
       obj.full_name
     );
+  END LOOP;
+
+  -- Functions
+  FOR obj IN
+    SELECT p.oid::regprocedure AS full_name
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname IN ('_realtime', 'realtime')
+      AND pg_get_userbyid(p.proowner) <> 'supabase_admin'
+  LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO supabase_admin', obj.full_name);
+  END LOOP;
+
+  -- Enum types (composite types tied to tables follow table ownership)
+  FOR obj IN
+    SELECT format('%I.%I', n.nspname, tp.typname) AS full_name
+    FROM pg_type tp JOIN pg_namespace n ON n.oid = tp.typnamespace
+    WHERE n.nspname IN ('_realtime', 'realtime')
+      AND tp.typtype = 'e'
+      AND pg_get_userbyid(tp.typowner) <> 'supabase_admin'
+  LOOP
+    EXECUTE format('ALTER TYPE %s OWNER TO supabase_admin', obj.full_name);
   END LOOP;
 END$$;
 
