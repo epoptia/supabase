@@ -312,6 +312,9 @@ services:
       - key: SECRET_KEY_BASE
         type: SECRET
         value: <REQUIRED>
+      - key: METRICS_JWT_SECRET
+        type: SECRET
+        value: <REQUIRED>
       - key: SEED_SELF_HOST
         value: "true"
       - key: SELF_HOST_TENANT_NAME
