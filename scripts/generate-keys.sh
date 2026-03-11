@@ -38,6 +38,7 @@ CRYPTO_KEY=$(openssl rand -base64 32)
 # Generate Realtime encryption keys
 DB_ENC_KEY=$(openssl rand -base64 12 | head -c 16)  # Must be exactly 16 characters for AES-128
 SECRET_KEY_BASE=$(openssl rand -base64 48)  # Must be at least 64 characters
+METRICS_JWT_SECRET=$(openssl rand -base64 32)  # Required since Realtime v2.78.13
 
 # Payloads
 ANON_PAYLOAD='{"role":"anon","iss":"supabase","iat":1609459200,"exp":9999999999}'
@@ -71,11 +72,14 @@ DB_ENC_KEY: $DB_ENC_KEY
 
 SECRET_KEY_BASE: $SECRET_KEY_BASE
 
+METRICS_JWT_SECRET: $METRICS_JWT_SECRET
+
 ================================================
 Usage:
 - Use SUPABASE_JWT_SECRET for: PGRST_JWT_SECRET, GOTRUE_JWT_SECRET, API_JWT_SECRET
 - Use CRYPTO_KEY for: PG_META_CRYPTO_KEY (Studio), CRYPTO_KEY (Meta)
 - Use DB_ENC_KEY for: Realtime DB_ENC_KEY
 - Use SECRET_KEY_BASE for: Realtime SECRET_KEY_BASE
+- Use METRICS_JWT_SECRET for: Realtime METRICS_JWT_SECRET
 ================================================
 EOF
