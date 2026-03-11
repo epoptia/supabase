@@ -198,6 +198,23 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 
+-- Grant permissions on realtime schemas to supabase_admin
+-- supabase_admin owns these schemas, but tables created by doadmin (e.g. on managed Postgres)
+-- won't be accessible without explicit grants + default privileges.
+GRANT ALL ON ALL TABLES IN SCHEMA realtime TO supabase_admin;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA realtime TO supabase_admin;
+GRANT ALL ON ALL ROUTINES IN SCHEMA realtime TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA realtime GRANT ALL ON TABLES TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA realtime GRANT ALL ON SEQUENCES TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA realtime GRANT ALL ON ROUTINES TO supabase_admin;
+
+GRANT ALL ON ALL TABLES IN SCHEMA _realtime TO supabase_admin;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA _realtime TO supabase_admin;
+GRANT ALL ON ALL ROUTINES IN SCHEMA _realtime TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON TABLES TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON SEQUENCES TO supabase_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON ROUTINES TO supabase_admin;
+
 -- Grant permissions on realtime schema (for Realtime migrations and subscriptions)
 GRANT USAGE ON SCHEMA realtime TO anon, authenticated, service_role;
 
