@@ -30,7 +30,11 @@ DB_PASSWORD=$(echo "$DATABASE_URL" | sed -n 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/p')
 
 # Run the initialization script with password variable for supabase_admin
 # Studio hardcodes 'supabase_admin' username, so we create it with doadmin's password
-psql "$DATABASE_URL" -v admin_password="$DB_PASSWORD" -f /app/init-db.sql
+# tenant_name: if SELF_HOST_TENANT_NAME is set, init-db renames 'realtime-dev' to this value
+psql "$DATABASE_URL" \
+  -v admin_password="$DB_PASSWORD" \
+  -v tenant_name="${SELF_HOST_TENANT_NAME:-}" \
+  -f /app/init-db.sql
 
 exit_code=$?
 

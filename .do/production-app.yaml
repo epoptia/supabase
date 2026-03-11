@@ -390,6 +390,8 @@ jobs:
       - key: DATABASE_URL
         type: SECRET
         value: ${supabase-db.DATABASE_URL}
+      - key: SELF_HOST_TENANT_NAME
+        value: supabase  # must match Realtime service's SELF_HOST_TENANT_NAME
 
 databases:
   - name: supabase-db
@@ -397,3 +399,6 @@ databases:
     production: true
     version: "18"
     cluster_name: supabase-db
+
+vpc:
+  id: <REQUIRED>  # VPC ID from: doctl vpcs list (must match DB's private_network_uuid)

@@ -398,26 +398,38 @@ ALTER ROLE supabase_auth_admin IN DATABASE defaultdb SET search_path = auth, pub
 ALTER ROLE supabase_admin IN DATABASE defaultdb SET search_path = public, extensions;
 
 -- ============================================================================
--- REALTIME: ensure db_pool and ssl_enforced are always set on tenant extensions
+-- REALTIME: enforce tenant extension settings on every deploy
 -- ============================================================================
 -- The Realtime seed (SEED_SELF_HOST=true) recreates the tenant on every restart
--- without db_pool (defaults to 1) or ssl_enforced (defaults to false).
--- db_pool=1 causes DatabaseConnectionRateLimitReached with multiple subscriptions.
--- ssl_enforced=false causes Postgrex to connect without SSL, which DO managed
--- Postgres rejects (pg_hba.conf only allows hostssl connections).
--- db_pool=5 is conservative for managed Postgres with max_connections=50 (Supabase Cloud
--- defaults to 1; 5 gives headroom for CDC multiplexing without exhausting the pool).
--- This trigger intercepts INSERTs AND UPDATEs so that re-seeding via UPSERT
--- (which the pipeline does on every deploy) can never override these values.
+-- without db_pool (defaults to 1) or ssl_enforced (defaults to false), and uses
+-- the default slot_name (supabase_realtime_replication_slot) ignoring the
+-- SLOT_NAME env var.
+--
+-- Multiple Realtime instances may share this database (e.g., App Platform +
+-- droplet). Each needs its own replication slot to avoid contention.
+-- The slot name is derived from :tenant_name (passed via run-db-init.sh from
+-- SELF_HOST_TENANT_NAME env var): <tenant_name>_realtime_slot_managed
+--
+-- Trigger enforces universal settings (db_pool, ssl_enforced) on ALL tenants.
+-- Slot name is patched separately only for the specified tenant.
+--
 -- On first deploy the _realtime.extensions table doesn't exist yet (created by
 -- Realtime migrations), so we guard with an IF EXISTS check.
+
+-- Store tenant_name in a session GUC so DO blocks can access it
+-- (psql :'variable' substitution does not work inside $$ strings).
+SELECT set_config('init.tenant_name', COALESCE(:'tenant_name', ''), false);
+
 DO $$
+DECLARE
+  v_tenant text := current_setting('init.tenant_name', true);
+  v_slot_name text;
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = '_realtime' AND table_name = 'extensions'
   ) THEN
-    -- Patch any existing extensions missing db_pool or ssl_enforced
+    -- Universal settings: db_pool and ssl_enforced for ALL tenants
     UPDATE _realtime.extensions
     SET settings = COALESCE(settings, '{}'::jsonb)
                   || jsonb_build_object('db_pool', 5, 'ssl_enforced', true),
@@ -428,7 +440,21 @@ BEGIN
         OR (settings->>'ssl_enforced')::boolean IS NOT TRUE
       );
 
-    -- Create trigger for future INSERTs and UPDATEs (handles re-seeding via UPSERT)
+    -- Slot isolation: only for the specified tenant (if tenant_name is set)
+    -- Derives slot name: <tenant_name>_realtime_slot_managed
+    IF v_tenant IS NOT NULL AND v_tenant != '' THEN
+      v_slot_name := v_tenant || '_realtime_slot_managed';
+      UPDATE _realtime.extensions
+      SET settings = jsonb_set(settings, '{slot_name}', to_jsonb(v_slot_name)),
+          updated_at = NOW()
+      WHERE type = 'postgres_cdc_rls'
+        AND tenant_external_id = v_tenant
+        AND settings->>'slot_name' IS DISTINCT FROM v_slot_name;
+      RAISE NOTICE 'init-db: slot_name for tenant "%" set to "%"', v_tenant, v_slot_name;
+    END IF;
+
+    -- Trigger: enforce db_pool and ssl_enforced on future INSERTs/UPDATEs.
+    -- Does NOT override slot_name — each tenant manages its own slot.
     CREATE OR REPLACE FUNCTION _realtime.ensure_tenant_settings()
     RETURNS TRIGGER AS $fn$
     BEGIN

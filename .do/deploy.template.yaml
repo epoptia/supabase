@@ -222,7 +222,7 @@ spec:
         registry_type: DOCKER_HUB
         registry: supabase
         repository: realtime
-        tag: v2.68.0
+        tag: v2.76.5
       http_port: 4000
       instance_size_slug: apps-d-1vcpu-2gb
       # instance_count: 2  # If autoscaling is disabled, uncomment and set instance_count (required)
@@ -245,8 +245,6 @@ spec:
       envs:
         - key: PORT
           value: "4000"
-        - key: APP_NAME
-          value: supabase-realtime
         - key: DB_HOST
           value: ${supabase-db.HOSTNAME}
         - key: DB_PORT
@@ -266,6 +264,23 @@ spec:
           value: "ipv4"
         - key: ERL_AFLAGS
           value: "-proto_dist inet_tcp"
+        # ── Cluster isolation ──
+        # DNS strategy with no peers = single-node mode (no Erlang peer discovery).
+        - key: CLUSTER_STRATEGIES
+          value: "DNS"
+        - key: DNS_NODES
+          value: ""
+        - key: APP_NAME
+          value: "realtime-managed"
+        - key: GEN_RPC_TCP_SERVER_PORT
+          value: "5370"
+        # ── Replication slot isolation ──
+        - key: TEMPORARY_SLOT
+          value: "true"
+        - key: SLOT_NAME
+          value: "supabase_realtime_slot_managed"
+        - key: PUBLICATIONS
+          value: "supabase_realtime"
         - key: DB_ENC_KEY
           type: SECRET
           value: <REQUIRED>
@@ -282,6 +297,8 @@ spec:
         - key: REPLICATION_MODE
           value: RLS
         - key: RUN_JANITOR
+          value: "true"
+        - key: DISABLE_HEALTHCHECK_LOGGING
           value: "true"
         - key: RLIMIT_NOFILE
           value: "65536"
@@ -304,24 +321,39 @@ spec:
           value: "production"
         - key: PORT
           value: "3011"
+        # ── Bridge behaviour ──
+        # emit = subscribe to Postgres changes AND forward to Realtime broadcast.
+        # observe = subscribe only (read-only monitoring, no emission).
+        - key: SUPABASE_BRIDGE_MODE
+          value: "emit"
+        - key: SUPABASE_BRIDGE_EMIT_TARGET
+          value: "supabase"
+        - key: SUPABASE_BRIDGE_BROADCAST_CHANNEL_PREFIX
+          value: "cdc"
+        # SaaS: auto-discover tenants from public.customers.subdomain
         - key: SUPABASE_TENANT_DISCOVERY
           value: "customers"
+        # Internal Realtime URL (private network)
         - key: SUPABASE_URL
           value: "http://realtime:4000"
+        # Public URL — used by TenantAwareWebSocket to inject the correct Host header
+        - key: SUPABASE_PUBLIC_URL
+          value: <REQUIRED>  # e.g., "https://supabase.epoptia.io"
         - key: DATABASE_URL
           value: ${supabase-db.DATABASE_URL}
           type: SECRET
         - key: DATABASE_URL_DEFAULTDB
           value: ${supabase-db.DATABASE_URL}
           type: SECRET
+        # Supabase auth for publishing to Realtime broadcast channels.
         - key: SUPABASE_ANON_KEY
-          value: <REQUIRED>
+          value: "<REQUIRED>"
           type: SECRET
         - key: SUPABASE_SERVICE_ROLE_KEY
-          value: <REQUIRED>
+          value: "<REQUIRED>"
           type: SECRET
         - key: SUPABASE_REALTIME_JWT
-          value: <REQUIRED>
+          value: "<REQUIRED>"
           type: SECRET
 
   jobs:
@@ -339,10 +371,12 @@ spec:
         - key: DATABASE_URL
           type: SECRET
           value: ${supabase-db.DATABASE_URL}
+        - key: SELF_HOST_TENANT_NAME
+          value: supabase  # must match Realtime service's SELF_HOST_TENANT_NAME
 
   databases:
     - name: supabase-db
       engine: PG
       production: true
-      version: "17"
+      version: "18"
       cluster_name: supabase-db
