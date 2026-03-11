@@ -245,7 +245,7 @@ services:
       registry_type: DOCKER_HUB
       registry: supabase
       repository: realtime
-      tag: v2.68.0
+      tag: v2.76.5
     http_port: 4000
     instance_size_slug: apps-d-1vcpu-2gb
     # instance_count: 2  # If autoscaling is disabled, uncomment and set instance_count (required)
@@ -268,8 +268,6 @@ services:
     envs:
       - key: PORT
         value: "4000"
-      - key: APP_NAME
-        value: supabase-realtime
       - key: DB_HOST
         value: ${supabase-db.HOSTNAME}
       - key: DB_PORT
@@ -289,6 +287,22 @@ services:
         value: "ipv4"
       - key: ERL_AFLAGS
         value: "-proto_dist inet_tcp"
+      # ── Cluster isolation ──
+      - key: CLUSTER_STRATEGIES
+        value: "DNS"
+      - key: DNS_NODES
+        value: ""
+      - key: APP_NAME
+        value: "realtime-managed"
+      - key: GEN_RPC_TCP_SERVER_PORT
+        value: "5370"
+      # ── Replication slot isolation ──
+      - key: TEMPORARY_SLOT
+        value: "true"
+      - key: SLOT_NAME
+        value: "supabase_realtime_slot_managed"
+      - key: PUBLICATIONS
+        value: "supabase_realtime"
       - key: DB_ENC_KEY
         type: SECRET
         value: <REQUIRED>
@@ -305,6 +319,8 @@ services:
       - key: REPLICATION_MODE
         value: RLS
       - key: RUN_JANITOR
+        value: "true"
+      - key: DISABLE_HEALTHCHECK_LOGGING
         value: "true"
       - key: RLIMIT_NOFILE
         value: "65536"
@@ -328,13 +344,20 @@ workers:
       # Bridge process binds to PORT internally — not exposed externally (Worker type).
       - key: PORT
         value: "3011"
-      # SaaS: auto-discover tenants from public.customers.subdomain
+      - key: SUPABASE_BRIDGE_MODE
+        value: "emit"
+      - key: SUPABASE_BRIDGE_EMIT_TARGET
+        value: "supabase"
+      - key: SUPABASE_BRIDGE_BROADCAST_CHANNEL_PREFIX
+        value: "cdc"
       - key: SUPABASE_TENANT_DISCOVERY
         value: "customers"
-      # Internal Realtime URL (private network — the template names this service "realtime" on port 4000).
+      # Internal Realtime URL (App Platform private network)
       - key: SUPABASE_URL
         value: "http://realtime:4000"
-      # DB connection — uses the attached managed Postgres.
+      # ⚠️  Update SUPABASE_PUBLIC_URL after first deploy with the actual public URL
+      - key: SUPABASE_PUBLIC_URL
+        value: "https://supabase.epoptia.io"
       - key: DATABASE_URL
         value: ${supabase-db.DATABASE_URL}
         type: SECRET
@@ -372,5 +395,5 @@ databases:
   - name: supabase-db
     engine: PG
     production: true
-    version: "17"
+    version: "18"
     cluster_name: supabase-db
