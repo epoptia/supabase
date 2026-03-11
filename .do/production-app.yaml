@@ -336,6 +336,8 @@ workers:
       registry: epoptia4-container
       repository: supabase-realtime-bridge
       tag: prod
+      deploy_on_push:
+        enabled: true
     instance_size_slug: basic-xs
     instance_count: 1
     envs:
