@@ -627,6 +627,92 @@ BEGIN
   RAISE NOTICE 'init-db: created realtime.list_changes() (no SET log_min_messages) and marked migration 20230328144023';
 END $$;
 
+-- ============================================================================
+-- FIX: subscription_check_filters() — permission denied for aiven_extras
+-- ============================================================================
+-- On DO managed Postgres, the internal "aiven_extras" schema is owned by
+-- the postgres superuser. The original subscription_check_filters() scans
+-- information_schema.columns and calls has_column_privilege() for EVERY row,
+-- which fails with "permission denied for schema aiven_extras" when it
+-- encounters tables in that hidden schema.
+--
+-- Fix: narrow the WHERE clause to only check columns for the target entity's
+-- schema and table, avoiding the full information_schema scan.
+--
+-- Guard: only applies when the subscription table exists (Realtime has booted).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'realtime' AND table_name = 'subscription'
+  ) THEN
+    RAISE NOTICE 'init-db: realtime.subscription not found — skipping subscription_check_filters fix';
+    RETURN;
+  END IF;
+
+  CREATE OR REPLACE FUNCTION realtime.subscription_check_filters()
+   RETURNS trigger
+   LANGUAGE plpgsql
+  AS $fn$
+      declare
+          col_names text[] = coalesce(
+                  array_agg(c.column_name order by c.ordinal_position),
+                  '{}'::text[]
+              )
+              from
+                  information_schema.columns c
+              where
+                  c.table_schema = (SELECT nspname FROM pg_class JOIN pg_namespace ON pg_namespace.oid = relnamespace WHERE pg_class.oid = new.entity)
+                  and c.table_name = (SELECT relname FROM pg_class WHERE oid = new.entity)
+                  and pg_catalog.has_column_privilege(
+                      (new.claims ->> 'role'),
+                      new.entity,
+                      c.column_name,
+                      'SELECT'
+                  );
+          filter realtime.user_defined_filter;
+          col_type regtype;
+
+          in_val jsonb;
+      begin
+          for filter in select * from unnest(new.filters) loop
+              if not filter.column_name = any(col_names) then
+                  raise exception 'invalid column for filter %', filter.column_name;
+              end if;
+
+              col_type = (
+                  select atttypid::regtype
+                  from pg_catalog.pg_attribute
+                  where attrelid = new.entity
+                        and attname = filter.column_name
+              );
+              if col_type is null then
+                  raise exception 'failed to lookup type for column %', filter.column_name;
+              end if;
+
+              if filter.op = 'in'::realtime.equality_op then
+                  in_val = realtime.cast(filter.value, (col_type::text || '[]')::regtype);
+                  if coalesce(jsonb_array_length(in_val), 0) > 100 then
+                      raise exception 'too many values for in filter. Maximum 100';
+                  end if;
+              else
+                  perform realtime.cast(filter.value, col_type);
+              end if;
+
+          end loop;
+
+          new.filters = coalesce(
+              array_agg(f order by f.column_name, f.op, f.value),
+              '{}'
+          ) from unnest(new.filters) f;
+
+          return new;
+      end;
+      $fn$;
+
+  RAISE NOTICE 'init-db: patched subscription_check_filters() to avoid aiven_extras schema scan';
+END $$;
+
 -- ============================================================
 -- Rename seeded tenant if SELF_HOST_TENANT_NAME differs from 'realtime-dev'.
 -- The psql variable :tenant_name is passed by run-db-init.sh.

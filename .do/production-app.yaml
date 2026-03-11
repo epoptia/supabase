@@ -245,7 +245,7 @@ services:
       registry_type: DOCKER_HUB
       registry: supabase
       repository: realtime
-      tag: v2.76.5
+      tag: v2.78.13
     http_port: 4000
     instance_size_slug: apps-d-1vcpu-2gb
     # instance_count: 2  # If autoscaling is disabled, uncomment and set instance_count (required)
