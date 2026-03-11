@@ -265,13 +265,28 @@ BEGIN
   END LOOP;
 END$$;
 
--- Grant supabase_admin USAGE + SELECT on all tenant schemas.
+-- Grant supabase_admin + service_role USAGE + SELECT on all tenant schemas.
 -- Realtime CDC's list_changes function runs as supabase_admin and needs
 -- to read from tenant tables to deliver postgres_changes events.
+-- service_role needs SELECT so has_column_privilege() returns true in list_changes,
+-- otherwise all columns come back as undefined in the CDC payload.
+-- Also sets REPLICA IDENTITY FULL on CDC tables for reliable UPDATE/DELETE payloads.
 -- Discovers tenants from public.customers.subdomain (each subdomain = schema name).
 DO $$
 DECLARE
   tenant_schema text;
+  tbl text;
+  cdc_tables text[] := ARRAY[
+    'users','pending_requests','terminals','workstations','products','clients',
+    'shifts','workflows','boards','users_hits','workorder_lines',
+    'workorder_line_elements','secondary_user_hits',
+    'workorder_line_material_values','workorder_line_custom_field_values',
+    'levels','permissions','level_permission','customer_info',
+    'tags','workstation_tags','user_workstation','board_tags',
+    'board_workstations','product_tag','client_tag','workorder_line_tag',
+    'warnings','warning_lines','warning_infos',
+    'print_templates','print_templates_se','custom_fields'
+  ];
 BEGIN
   FOR tenant_schema IN
     SELECT subdomain FROM public.customers WHERE subdomain IS NOT NULL
@@ -280,7 +295,21 @@ BEGIN
       EXECUTE format('GRANT USAGE ON SCHEMA %I TO supabase_admin', tenant_schema);
       EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO supabase_admin', tenant_schema);
       EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA %I GRANT SELECT ON TABLES TO supabase_admin', tenant_schema);
-      RAISE NOTICE 'Granted supabase_admin access to tenant schema: %', tenant_schema;
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO service_role', tenant_schema);
+      EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO service_role', tenant_schema);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA %I GRANT SELECT ON TABLES TO service_role', tenant_schema);
+      RAISE NOTICE 'Granted supabase_admin + service_role access to tenant schema: %', tenant_schema;
+
+      -- Set REPLICA IDENTITY FULL on CDC tables for reliable UPDATE/DELETE payloads
+      FOREACH tbl IN ARRAY cdc_tables LOOP
+        IF EXISTS (
+          SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = tenant_schema AND c.relname = tbl
+        ) THEN
+          EXECUTE format('ALTER TABLE %I.%I REPLICA IDENTITY FULL', tenant_schema, tbl);
+        END IF;
+      END LOOP;
+      RAISE NOTICE 'Set REPLICA IDENTITY FULL on CDC tables in schema: %', tenant_schema;
     END IF;
   END LOOP;
 END $$;
