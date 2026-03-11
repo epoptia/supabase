@@ -219,6 +219,30 @@ ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON TABLE
 ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON SEQUENCES TO supabase_admin;
 ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON ROUTINES TO supabase_admin;
 
+-- Transfer ownership of existing _realtime and realtime objects to supabase_admin.
+-- Realtime runs its own Ecto migrations as supabase_admin and needs to ALTER tables
+-- it owns. On the first deploy doadmin creates these tables, so we fix ownership here.
+DO $$
+DECLARE
+  obj record;
+BEGIN
+  FOR obj IN
+    SELECT c.oid::regclass AS full_name, c.relkind
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('_realtime', 'realtime')
+      AND c.relkind IN ('r','p','S','v','m')  -- tables, partitioned, sequences, views, matviews
+      AND pg_get_userbyid(c.relowner) <> 'supabase_admin'
+  LOOP
+    EXECUTE format('ALTER %s %s OWNER TO supabase_admin',
+      CASE obj.relkind
+        WHEN 'S' THEN 'SEQUENCE'
+        ELSE 'TABLE'
+      END,
+      obj.full_name
+    );
+  END LOOP;
+END$$;
+
 -- Grant supabase_admin USAGE + SELECT on all tenant schemas.
 -- Realtime CDC's list_changes function runs as supabase_admin and needs
 -- to read from tenant tables to deliver postgres_changes events.
