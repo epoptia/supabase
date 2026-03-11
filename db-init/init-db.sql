@@ -219,6 +219,26 @@ ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON TABLE
 ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON SEQUENCES TO supabase_admin;
 ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA _realtime GRANT ALL ON ROUTINES TO supabase_admin;
 
+-- Grant supabase_admin USAGE + SELECT on all tenant schemas.
+-- Realtime CDC's list_changes function runs as supabase_admin and needs
+-- to read from tenant tables to deliver postgres_changes events.
+-- Discovers tenants from public.customers.subdomain (each subdomain = schema name).
+DO $$
+DECLARE
+  tenant_schema text;
+BEGIN
+  FOR tenant_schema IN
+    SELECT subdomain FROM public.customers WHERE subdomain IS NOT NULL
+  LOOP
+    IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = tenant_schema) THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO supabase_admin', tenant_schema);
+      EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO supabase_admin', tenant_schema);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE doadmin IN SCHEMA %I GRANT SELECT ON TABLES TO supabase_admin', tenant_schema);
+      RAISE NOTICE 'Granted supabase_admin access to tenant schema: %', tenant_schema;
+    END IF;
+  END LOOP;
+END $$;
+
 -- Grant permissions on realtime schema (for Realtime migrations and subscriptions)
 GRANT USAGE ON SCHEMA realtime TO anon, authenticated, service_role;
 
