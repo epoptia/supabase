@@ -287,12 +287,11 @@ services:
         value: "ipv4"
       - key: ERL_AFLAGS
         value: "-proto_dist inet_tcp"
-      # ── Cluster isolation ──
-      # DNS strategy with no peers = single-node mode (no Erlang peer discovery).
-      - key: CLUSTER_STRATEGIES
-        value: "DNS"
-      - key: DNS_NODES
-        value: ""
+      # ── Cluster isolation (commented out — defaults work for single-node) ──
+      # - key: CLUSTER_STRATEGIES
+      #   value: "DNS"
+      # - key: DNS_NODES
+      #   value: ""
       - key: APP_NAME
         value: "realtime-managed"
       - key: GEN_RPC_TCP_SERVER_PORT
@@ -405,6 +404,10 @@ databases:
     production: true
     version: "18"
     cluster_name: supabase-db
+
+domains:
+  - domain: supabase.epoptia.io
+    type: PRIMARY
 
 vpc:
   id: <REQUIRED>  # VPC ID from: doctl vpcs list (must match DB's private_network_uuid)
