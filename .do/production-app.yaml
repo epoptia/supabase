@@ -288,6 +288,7 @@ services:
       - key: ERL_AFLAGS
         value: "-proto_dist inet_tcp"
       # ── Cluster isolation ──
+      # DNS strategy with no peers = single-node mode (no Erlang peer discovery).
       - key: CLUSTER_STRATEGIES
         value: "DNS"
       - key: DNS_NODES
@@ -296,7 +297,7 @@ services:
         value: "realtime-managed"
       - key: GEN_RPC_TCP_SERVER_PORT
         value: "5370"
-      # ── Replication slot isolation ──
+      # ── Replication slot ──
       - key: TEMPORARY_SLOT
         value: "true"
       - key: SLOT_NAME
